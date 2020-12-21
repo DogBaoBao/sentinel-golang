@@ -1,3 +1,17 @@
+// Copyright 1999-2020 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package base
 
 import (
@@ -7,6 +21,7 @@ import (
 	"unsafe"
 
 	"github.com/alibaba/sentinel-golang/util"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -20,31 +35,17 @@ const (
 )
 
 func Test_bucketWrapper_Size(t *testing.T) {
-	type Obj struct {
-		a1 int32 // 4bytes
-		a2 int32
-		a3 int32
-		a4 int32
-		a5 int32
-		a6 int32
-		a7 int32
-		a8 int32
-	}
 	ww := &BucketWrap{
 		BucketStart: util.CurrentTimeMillis(),
 		Value:       atomic.Value{},
 	}
 	if unsafe.Sizeof(*ww) != 24 {
-		t.Errorf("the size of BucketWrap is not equal 20.\n")
+		t.Errorf("the size of BucketWrap is not equal 24.\n")
 	}
 	if unsafe.Sizeof(ww) != 8 {
-		t.Errorf("the size of BucketWrap is not equal 20.\n")
+		t.Errorf("the size of BucketWrap pointer is not equal 8.\n")
 	}
 }
-
-//type metricBucketMock struct {
-//	mock.Mock
-//}
 
 // mock ArrayMock and implement BucketGenerator
 type leapArrayMock struct {
@@ -67,7 +68,6 @@ func Test_leapArray_calculateTimeIdx_normal(t *testing.T) {
 		sampleCount      uint32
 		intervalInMs     uint32
 		array            *AtomicBucketWrapArray
-		mux              mutex
 	}
 	type args struct {
 		timeMillis uint64
@@ -85,7 +85,6 @@ func Test_leapArray_calculateTimeIdx_normal(t *testing.T) {
 				sampleCount:      SampleCount,
 				intervalInMs:     IntervalInMs,
 				array:            NewAtomicBucketWrapArray(int(SampleCount), BucketLengthInMs, &leapArrayMock{}),
-				mux:              mutex{},
 			},
 			args: args{
 				timeMillis: 1576296044907,
@@ -100,7 +99,7 @@ func Test_leapArray_calculateTimeIdx_normal(t *testing.T) {
 				sampleCount:      tt.fields.sampleCount,
 				intervalInMs:     tt.fields.intervalInMs,
 				array:            tt.fields.array,
-				updateLock:       tt.fields.mux,
+				updateLock:       mutex{},
 			}
 			if got := la.calculateTimeIdx(tt.args.timeMillis); got != tt.want {
 				t.Errorf("LeapArray.calculateTimeIdx() = %v, want %v", got, tt.want)
@@ -142,122 +141,24 @@ func Test_calculateStartTime_normal(t *testing.T) {
 }
 
 func Test_leapArray_BucketStartCheck_normal(t *testing.T) {
-	type fields struct {
-		BucketLengthInMs uint32
-		sampleCount      uint32
-		intervalInMs     uint32
-		array            *AtomicBucketWrapArray
-		mux              mutex
+	now := uint64(1596199310000)
+	la := &LeapArray{
+		bucketLengthInMs: BucketLengthInMs,
+		sampleCount:      SampleCount,
+		intervalInMs:     IntervalInMs,
+		array:            NewAtomicBucketWrapArrayWithTime(int(SampleCount), BucketLengthInMs, now, &leapArrayMock{}),
+		updateLock:       mutex{},
 	}
-	type args struct {
-		bg         BucketGenerator
-		timeMillis uint64
+	got, err := la.currentBucketOfTime(now+801, new(leapArrayMock))
+	if err != nil {
+		t.Errorf("LeapArray.currentBucketOfTime() error = %v\n", err)
+		return
 	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   uint64 //start time of bucket
-	}{
-		{
-			name: "Test_leapArray_BucketStartCheck_normal",
-			fields: fields{
-				BucketLengthInMs: BucketLengthInMs,
-				sampleCount:      SampleCount,
-				intervalInMs:     IntervalInMs,
-				array:            NewAtomicBucketWrapArray(int(SampleCount), BucketLengthInMs, &leapArrayMock{}),
-				mux:              mutex{},
-			},
-			args: args{
-				bg:         new(leapArrayMock),
-				timeMillis: 1576296044907,
-			},
-			want: 1576296044500,
-		},
+	if got.BucketStart != now+500 {
+		t.Errorf("BucketStart = %v, want %v", got.BucketStart, now+500)
 	}
-	wwPtr := tests[0].fields.array.get(9)
-	wwPtr.BucketStart = 1576296044500 //start time of cycle 1576296040000
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			la := &LeapArray{
-				bucketLengthInMs: tt.fields.BucketLengthInMs,
-				sampleCount:      tt.fields.sampleCount,
-				intervalInMs:     tt.fields.intervalInMs,
-				array:            tt.fields.array,
-				updateLock:       tt.fields.mux,
-			}
-			got, err := la.currentBucketOfTime(tt.args.timeMillis, tt.args.bg)
-			if err != nil {
-				t.Errorf("LeapArray.currentBucketOfTime() error = %v\n", err)
-				return
-			}
-			if got.BucketStart != tt.want {
-				t.Errorf("BucketStart = %v, want %v", got.BucketStart, tt.want)
-			}
-		})
-	}
-}
-
-func Test_leapArray_currentBucketWithTime_normal(t *testing.T) {
-	type fields struct {
-		bucketLengthInMs uint32
-		sampleCount      uint32
-		intervalInMs     uint32
-		array            *AtomicBucketWrapArray
-		mux              mutex
-	}
-	type args struct {
-		bg         BucketGenerator
-		timeMillis uint64
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		want    *BucketWrap
-		wantErr bool
-	}{
-		{
-			name: "Test_leapArray_currentBucketWithTime_normal",
-			fields: fields{
-				bucketLengthInMs: BucketLengthInMs,
-				sampleCount:      SampleCount,
-				intervalInMs:     IntervalInMs,
-				array:            NewAtomicBucketWrapArray(int(SampleCount), BucketLengthInMs, &leapArrayMock{}),
-				mux:              mutex{},
-			},
-			args: args{
-				bg:         new(leapArrayMock),
-				timeMillis: 1576296044907,
-			},
-			want:    nil,
-			wantErr: false,
-		},
-	}
-
-	wwPtr := tests[0].fields.array.get(9)
-	wwPtr.BucketStart = 1576296044500 //start time of cycle 1576296040000
-	tests[0].want = tests[0].fields.array.get(9)
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			la := &LeapArray{
-				bucketLengthInMs: tt.fields.bucketLengthInMs,
-				sampleCount:      tt.fields.sampleCount,
-				intervalInMs:     tt.fields.intervalInMs,
-				array:            tt.fields.array,
-				updateLock:       tt.fields.mux,
-			}
-			got, err := la.currentBucketOfTime(tt.args.timeMillis, tt.args.bg)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("LeapArray.currentBucketOfTime() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("LeapArray.currentBucketOfTime() = %v, want %v", got, tt.want)
-			}
-		})
+	if !reflect.DeepEqual(got, la.array.get(1)) {
+		t.Errorf("LeapArray.currentBucketOfTime() = %v, want %v", got, la.array.get(1))
 	}
 }
 
@@ -267,7 +168,6 @@ func Test_leapArray_valuesWithTime_normal(t *testing.T) {
 		sampleCount      uint32
 		intervalInMs     uint32
 		array            *AtomicBucketWrapArray
-		mux              mutex
 	}
 	type args struct {
 		timeMillis uint64
@@ -285,8 +185,7 @@ func Test_leapArray_valuesWithTime_normal(t *testing.T) {
 				bucketLengthInMs: BucketLengthInMs,
 				sampleCount:      SampleCount,
 				intervalInMs:     IntervalInMs,
-				array:            NewAtomicBucketWrapArray(int(SampleCount), BucketLengthInMs, &leapArrayMock{}),
-				mux:              mutex{},
+				array:            NewAtomicBucketWrapArrayWithTime(int(SampleCount), BucketLengthInMs, uint64(1596199310000), &leapArrayMock{}),
 			},
 			args: args{
 				timeMillis: 1576296049907,
@@ -310,7 +209,7 @@ func Test_leapArray_valuesWithTime_normal(t *testing.T) {
 				sampleCount:      tt.fields.sampleCount,
 				intervalInMs:     tt.fields.intervalInMs,
 				array:            tt.fields.array,
-				updateLock:       tt.fields.mux,
+				updateLock:       mutex{},
 			}
 			got := la.valuesWithTime(tt.args.timeMillis)
 			for _, g := range got {
@@ -336,7 +235,6 @@ func Test_leapArray_isBucketDeprecated_normal(t *testing.T) {
 		sampleCount      uint32
 		intervalInMs     uint32
 		array            *AtomicBucketWrapArray
-		mux              mutex
 	}
 	type args struct {
 		startTime uint64
@@ -354,8 +252,7 @@ func Test_leapArray_isBucketDeprecated_normal(t *testing.T) {
 				bucketLengthInMs: BucketLengthInMs,
 				sampleCount:      SampleCount,
 				intervalInMs:     IntervalInMs,
-				array:            NewAtomicBucketWrapArray(int(SampleCount), BucketLengthInMs, &leapArrayMock{}),
-				mux:              mutex{},
+				array:            NewAtomicBucketWrapArrayWithTime(int(SampleCount), BucketLengthInMs, uint64(1596199310000), &leapArrayMock{}),
 			},
 			args: args{
 				startTime: 1576296044907,
@@ -374,11 +271,30 @@ func Test_leapArray_isBucketDeprecated_normal(t *testing.T) {
 				sampleCount:      tt.fields.sampleCount,
 				intervalInMs:     tt.fields.intervalInMs,
 				array:            tt.fields.array,
-				updateLock:       tt.fields.mux,
+				updateLock:       mutex{},
 			}
 			if got := la.isBucketDeprecated(tt.args.startTime, tt.args.ww); got != tt.want {
 				t.Errorf("LeapArray.isBucketDeprecated() = %v, want %v", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestNewLeapArray(t *testing.T) {
+	t.Run("TestNewLeapArray_Normal", func(t *testing.T) {
+		_, err := NewLeapArray(SampleCount, IntervalInMs, &leapArrayMock{})
+		assert.Nil(t, err)
+	})
+
+	t.Run("TestNewLeapArray_Generator_Nil", func(t *testing.T) {
+		leapArray, err := NewLeapArray(SampleCount, IntervalInMs, nil)
+		assert.Nil(t, leapArray)
+		assert.Error(t, err, "Invalid parameters, BucketGenerator is nil")
+	})
+
+	t.Run("TestNewLeapArray_Invalid_Parameters", func(t *testing.T) {
+		leapArray, err := NewLeapArray(30, IntervalInMs, nil)
+		assert.Nil(t, leapArray)
+		assert.Error(t, err, "Invalid parameters, intervalInMs is 10000, sampleCount is 30")
+	})
 }

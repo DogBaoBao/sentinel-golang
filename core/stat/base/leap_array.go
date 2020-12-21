@@ -1,3 +1,17 @@
+// Copyright 1999-2020 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package base
 
 import (
@@ -7,6 +21,7 @@ import (
 	"unsafe"
 
 	"github.com/alibaba/sentinel-golang/core/base"
+	"github.com/alibaba/sentinel-golang/logging"
 	"github.com/alibaba/sentinel-golang/util"
 	"github.com/pkg/errors"
 )
@@ -49,28 +64,33 @@ type AtomicBucketWrapArray struct {
 	data   []*BucketWrap
 }
 
-// New AtomicBucketWrapArray with initializing field data
-// Default, automatically initialize each BucketWrap
-// len: length of array
-// bucketLengthInMs: bucket length of BucketWrap
-// generator: generator to generate bucket
-func NewAtomicBucketWrapArray(len int, bucketLengthInMs uint32, generator BucketGenerator) *AtomicBucketWrapArray {
+func NewAtomicBucketWrapArrayWithTime(len int, bucketLengthInMs uint32, now uint64, generator BucketGenerator) *AtomicBucketWrapArray {
 	ret := &AtomicBucketWrapArray{
 		length: len,
 		data:   make([]*BucketWrap, len),
 	}
 
-	// automatically initialize each BucketWrap
-	// tail BucketWrap of data is initialized with current time
-	startTime := calculateStartTime(util.CurrentTimeMillis(), bucketLengthInMs)
-	for i := len - 1; i >= 0; i-- {
+	timeId := now / uint64(bucketLengthInMs)
+	idx := int(timeId) % len
+	startTime := calculateStartTime(now, bucketLengthInMs)
+
+	for i := idx; i <= len-1; i++ {
 		ww := &BucketWrap{
 			BucketStart: startTime,
 			Value:       atomic.Value{},
 		}
 		ww.Value.Store(generator.NewEmptyBucket())
 		ret.data[i] = ww
-		startTime -= uint64(bucketLengthInMs)
+		startTime += uint64(bucketLengthInMs)
+	}
+	for i := 0; i < idx; i++ {
+		ww := &BucketWrap{
+			BucketStart: startTime,
+			Value:       atomic.Value{},
+		}
+		ww.Value.Store(generator.NewEmptyBucket())
+		ret.data[i] = ww
+		startTime += uint64(bucketLengthInMs)
 	}
 
 	// calculate base address for real data array
@@ -79,31 +99,56 @@ func NewAtomicBucketWrapArray(len int, bucketLengthInMs uint32, generator Bucket
 	return ret
 }
 
-func (aa *AtomicBucketWrapArray) elementOffset(idx int) unsafe.Pointer {
-	if idx >= aa.length && idx < 0 {
-		panic(fmt.Sprintf("The index (%d) is out of bounds, length is %d.", idx, aa.length))
+// New AtomicBucketWrapArray with initializing field data
+// Default, automatically initialize each BucketWrap
+// len: length of array
+// bucketLengthInMs: bucket length of BucketWrap
+// generator: generator to generate bucket
+func NewAtomicBucketWrapArray(len int, bucketLengthInMs uint32, generator BucketGenerator) *AtomicBucketWrapArray {
+	return NewAtomicBucketWrapArrayWithTime(len, bucketLengthInMs, util.CurrentTimeMillis(), generator)
+}
+
+func (aa *AtomicBucketWrapArray) elementOffset(idx int) (unsafe.Pointer, bool) {
+	if idx >= aa.length || idx < 0 {
+		logging.Error(errors.New("array index out of bounds"),
+			"array index out of bounds in AtomicBucketWrapArray.elementOffset()",
+			"idx", idx, "arrayLength", aa.length)
+		return nil, false
 	}
 	basePtr := aa.base
-	return unsafe.Pointer(uintptr(basePtr) + uintptr(idx*PtrSize))
+	return unsafe.Pointer(uintptr(basePtr) + uintptr(idx*PtrSize)), true
 }
 
 func (aa *AtomicBucketWrapArray) get(idx int) *BucketWrap {
 	// aa.elementOffset(idx) return the secondary pointer of BucketWrap, which is the pointer to the aa.data[idx]
 	// then convert to (*unsafe.Pointer)
-	return (*BucketWrap)(atomic.LoadPointer((*unsafe.Pointer)(aa.elementOffset(idx))))
+	if offset, ok := aa.elementOffset(idx); ok {
+		return (*BucketWrap)(atomic.LoadPointer((*unsafe.Pointer)(offset)))
+	}
+	return nil
 }
 
 func (aa *AtomicBucketWrapArray) compareAndSet(idx int, except, update *BucketWrap) bool {
 	// aa.elementOffset(idx) return the secondary pointer of BucketWrap, which is the pointer to the aa.data[idx]
 	// then convert to (*unsafe.Pointer)
 	// update secondary pointer
-	return atomic.CompareAndSwapPointer((*unsafe.Pointer)(aa.elementOffset(idx)), unsafe.Pointer(except), unsafe.Pointer(update))
+	if offset, ok := aa.elementOffset(idx); ok {
+		return atomic.CompareAndSwapPointer((*unsafe.Pointer)(offset), unsafe.Pointer(except), unsafe.Pointer(update))
+	}
+	return false
 }
 
 // The BucketWrap leap array,
 // sampleCount represent the number of BucketWrap
 // intervalInMs represent the interval of LeapArray.
-// For example, bucketLengthInMs is 500ms, intervalInMs is 1min, so sampleCount is 120.
+// For example, bucketLengthInMs is 200ms, intervalInMs is 1000ms, so sampleCount is 5.
+// Give a diagram to illustrate
+// Suppose current time is 888, bucketLengthInMs is 200ms, intervalInMs is 1000ms, LeapArray will build the below windows
+//   B0       B1      B2     B3      B4
+//   |_______|_______|_______|_______|_______|
+//  1000    1200    1400    1600    800    (1000)
+//                                        ^
+//                                      time=888
 type LeapArray struct {
 	bucketLengthInMs uint32
 	sampleCount      uint32
@@ -113,20 +158,20 @@ type LeapArray struct {
 	updateLock mutex
 }
 
-func NewLeapArray(sampleCount uint32, intervalInMs uint32, generator BucketGenerator) *LeapArray {
+func NewLeapArray(sampleCount uint32, intervalInMs uint32, generator BucketGenerator) (*LeapArray, error) {
 	if intervalInMs%sampleCount != 0 {
-		panic(fmt.Sprintf("Invalid parameters, intervalInMs is %d, sampleCount is %d.", intervalInMs, sampleCount))
+		return nil, errors.Errorf("Invalid parameters, intervalInMs is %d, sampleCount is %d", intervalInMs, sampleCount)
 	}
 	if generator == nil {
-		panic("Invalid parameters, generator is nil.")
+		return nil, errors.Errorf("Invalid parameters, BucketGenerator is nil")
 	}
 	bucketLengthInMs := intervalInMs / sampleCount
 	return &LeapArray{
 		bucketLengthInMs: bucketLengthInMs,
 		sampleCount:      sampleCount,
 		intervalInMs:     intervalInMs,
-		array:            NewAtomicBucketWrapArray(int(sampleCount), intervalInMs, generator),
-	}
+		array:            NewAtomicBucketWrapArray(int(sampleCount), bucketLengthInMs, generator),
+	}, nil
 }
 
 func (la *LeapArray) CurrentBucket(bg BucketGenerator) (*BucketWrap, error) {
@@ -134,7 +179,7 @@ func (la *LeapArray) CurrentBucket(bg BucketGenerator) (*BucketWrap, error) {
 }
 
 func (la *LeapArray) currentBucketOfTime(now uint64, bg BucketGenerator) (*BucketWrap, error) {
-	if now < 0 {
+	if now <= 0 {
 		return nil, errors.New("Current time is less than 0.")
 	}
 
@@ -168,7 +213,11 @@ func (la *LeapArray) currentBucketOfTime(now uint64, bg BucketGenerator) (*Bucke
 			} else {
 				runtime.Gosched()
 			}
-		} else if bucketStart < old.BucketStart {
+		} else if bucketStart < atomic.LoadUint64(&old.BucketStart) {
+			if la.sampleCount == 1 {
+				// if sampleCount==1 in leap array, in concurrency scenario, this case is possible
+				return old, nil
+			}
 			// TODO: reserve for some special case (e.g. when occupying "future" buckets).
 			return nil, errors.New(fmt.Sprintf("Provided time timeMillis=%d is already behind old.BucketStart=%d.", bucketStart, old.BucketStart))
 		}
@@ -180,7 +229,7 @@ func (la *LeapArray) calculateTimeIdx(now uint64) int {
 	return int(timeId) % la.array.length
 }
 
-//  Get all BucketWrap between [current time -1000ms, current time]
+//  Get all BucketWrap between [current time - leap array interval, current time]
 func (la *LeapArray) Values() []*BucketWrap {
 	return la.valuesWithTime(util.CurrentTimeMillis())
 }
@@ -189,7 +238,7 @@ func (la *LeapArray) valuesWithTime(now uint64) []*BucketWrap {
 	if now <= 0 {
 		return make([]*BucketWrap, 0)
 	}
-	ret := make([]*BucketWrap, 0)
+	ret := make([]*BucketWrap, 0, la.array.length)
 	for i := 0; i < la.array.length; i++ {
 		ww := la.array.get(i)
 		if ww == nil || la.isBucketDeprecated(now, ww) {
@@ -204,7 +253,7 @@ func (la *LeapArray) ValuesConditional(now uint64, predicate base.TimePredicate)
 	if now <= 0 {
 		return make([]*BucketWrap, 0)
 	}
-	ret := make([]*BucketWrap, 0)
+	ret := make([]*BucketWrap, 0, la.array.length)
 	for i := 0; i < la.array.length; i++ {
 		ww := la.array.get(i)
 		if ww == nil || la.isBucketDeprecated(now, ww) || !predicate(atomic.LoadUint64(&ww.BucketStart)) {

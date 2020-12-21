@@ -1,3 +1,17 @@
+// Copyright 1999-2020 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datasource
 
 import (
@@ -11,7 +25,7 @@ import (
 )
 
 func MockSystemRulesConverter(src []byte) (interface{}, error) {
-	ret := make([]system.SystemRule, 0)
+	ret := make([]system.Rule, 0)
 	_ = json.Unmarshal(src, &ret)
 	return ret, nil
 }
@@ -50,7 +64,7 @@ func TestSinglePropertyHandler_isPropertyConsistent(t *testing.T) {
 	if err != nil {
 		t.Errorf("Fail to get source file, err:%+v", err)
 	}
-	ret1 := make([]system.SystemRule, 0)
+	ret1 := make([]system.Rule, 0)
 	_ = json.Unmarshal(src, &ret1)
 	isConsistent := h.isPropertyConsistent(ret1)
 	assert.True(t, isConsistent == false, "Fail to execute isPropertyConsistent.")
@@ -59,7 +73,7 @@ func TestSinglePropertyHandler_isPropertyConsistent(t *testing.T) {
 	if err != nil {
 		t.Errorf("Fail to get source file, err:%+v", err)
 	}
-	ret2 := make([]system.SystemRule, 0)
+	ret2 := make([]system.Rule, 0)
 	_ = json.Unmarshal(src2, &ret2)
 	isConsistent = h.isPropertyConsistent(ret2)
 	assert.True(t, isConsistent == true, "Fail to execute isPropertyConsistent.")
@@ -68,7 +82,7 @@ func TestSinglePropertyHandler_isPropertyConsistent(t *testing.T) {
 	if err != nil {
 		t.Errorf("Fail to get source file, err:%+v", err)
 	}
-	ret3 := make([]system.SystemRule, 0)
+	ret3 := make([]system.Rule, 0)
 	_ = json.Unmarshal(src3, &ret3)
 	isConsistent = h.isPropertyConsistent(ret3)
 	assert.True(t, isConsistent == false, "Fail to execute isPropertyConsistent.")

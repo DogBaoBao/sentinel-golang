@@ -1,3 +1,17 @@
+// Copyright 1999-2020 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package system
 
 import (
@@ -8,24 +22,24 @@ import (
 
 func TestGetRules(t *testing.T) {
 	t.Run("EmptyRules", func(t *testing.T) {
-		rules := GetRules()
+		rules := getRules()
 		assert.Equal(t, 0, len(rules))
 	})
 
 	t.Run("GetUpdatedRules", func(t *testing.T) {
 		defer func() { ruleMap = make(RuleMap) }()
 
-		r := map[MetricType][]*SystemRule{
-			InboundQPS:  {&SystemRule{MetricType: InboundQPS, TriggerCount: 1}},
-			Concurrency: {&SystemRule{MetricType: Concurrency, TriggerCount: 2}},
+		r := map[MetricType][]*Rule{
+			InboundQPS:  {&Rule{MetricType: InboundQPS, TriggerCount: 1}},
+			Concurrency: {&Rule{MetricType: Concurrency, TriggerCount: 2}},
 		}
 		ruleMap = r
-		rules := GetRules()
+		rules := getRules()
 		assert.Equal(t, 2, len(rules))
 
-		r[InboundQPS] = append(r[InboundQPS], &SystemRule{MetricType: InboundQPS, TriggerCount: 2})
+		r[InboundQPS] = append(r[InboundQPS], &Rule{MetricType: InboundQPS, TriggerCount: 2})
 		ruleMap = r
-		rules = GetRules()
+		rules = getRules()
 		assert.Equal(t, 3, len(rules))
 	})
 }
@@ -40,7 +54,7 @@ func TestLoadRules(t *testing.T) {
 
 	t.Run("ValidSystemRule", func(t *testing.T) {
 		defer func() { ruleMap = make(RuleMap) }()
-		sRule := []*SystemRule{
+		sRule := []*Rule{
 			{MetricType: InboundQPS, TriggerCount: 1},
 			{MetricType: Concurrency, TriggerCount: 2},
 		}
@@ -59,12 +73,15 @@ func TestClearRules(t *testing.T) {
 	})
 
 	t.Run("NoEmptyOriginRuleMap", func(t *testing.T) {
-		r := map[MetricType][]*SystemRule{
-			InboundQPS:  {&SystemRule{MetricType: InboundQPS, TriggerCount: 1}},
-			Concurrency: {&SystemRule{MetricType: Concurrency, TriggerCount: 2}},
+		r := []*Rule{
+			{MetricType: InboundQPS, TriggerCount: 1},
+			{MetricType: Concurrency, TriggerCount: 2},
 		}
-		ruleMap = r
-		err := ClearRules()
+		isOK, err := LoadRules(r)
+		assert.Equal(t, true, isOK)
+		assert.Nil(t, err)
+		assert.Equal(t, 2, len(ruleMap))
+		err = ClearRules()
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(ruleMap))
 	})
@@ -80,10 +97,10 @@ func TestOnRuleUpdate(t *testing.T) {
 	t.Run("ValidSystemRule", func(t *testing.T) {
 		defer func() { ruleMap = make(RuleMap) }()
 		rMap := RuleMap{
-			InboundQPS: []*SystemRule{
+			InboundQPS: []*Rule{
 				{MetricType: InboundQPS, TriggerCount: 1},
 			},
-			Concurrency: []*SystemRule{
+			Concurrency: []*Rule{
 				{MetricType: Concurrency, TriggerCount: 2},
 			},
 		}
@@ -100,7 +117,7 @@ func TestBuildRuleMap(t *testing.T) {
 	})
 
 	t.Run("InvalidSystemRule", func(t *testing.T) {
-		sRule := []*SystemRule{
+		sRule := []*Rule{
 			{MetricType: InboundQPS, TriggerCount: -1},
 		}
 		r := buildRuleMap(sRule)
@@ -108,7 +125,7 @@ func TestBuildRuleMap(t *testing.T) {
 	})
 
 	t.Run("ValidSystemRule", func(t *testing.T) {
-		sRule := []*SystemRule{
+		sRule := []*Rule{
 			{MetricType: InboundQPS, TriggerCount: 1},
 			{MetricType: Concurrency, TriggerCount: 2},
 		}
@@ -117,7 +134,7 @@ func TestBuildRuleMap(t *testing.T) {
 	})
 
 	t.Run("MultiRuleOneTypeValidSystemRule", func(t *testing.T) {
-		sRule := []*SystemRule{
+		sRule := []*Rule{
 			{MetricType: InboundQPS, TriggerCount: 1},
 			{MetricType: InboundQPS, TriggerCount: 2},
 		}
@@ -129,29 +146,29 @@ func TestBuildRuleMap(t *testing.T) {
 func TestIsValidSystemRule(t *testing.T) {
 	t.Run("NilSystemRule", func(t *testing.T) {
 		err := IsValidSystemRule(nil)
-		assert.EqualError(t, err, "nil SystemRule")
+		assert.EqualError(t, err, "nil Rule")
 	})
 
 	t.Run("NegativeThreshold", func(t *testing.T) {
-		sRule := &SystemRule{MetricType: InboundQPS, TriggerCount: -1}
+		sRule := &Rule{MetricType: InboundQPS, TriggerCount: -1}
 		err := IsValidSystemRule(sRule)
 		assert.EqualError(t, err, "negative threshold")
 	})
 
 	t.Run("InvalidMetricType", func(t *testing.T) {
-		sRule := &SystemRule{MetricType: MetricTypeSize}
+		sRule := &Rule{MetricType: MetricTypeSize}
 		err := IsValidSystemRule(sRule)
 		assert.EqualError(t, err, "invalid metric type")
 	})
 
 	t.Run("InvalidCPUUsage", func(t *testing.T) {
-		sRule := &SystemRule{MetricType: CpuUsage, TriggerCount: 75}
+		sRule := &Rule{MetricType: CpuUsage, TriggerCount: 75}
 		err := IsValidSystemRule(sRule)
 		assert.EqualError(t, err, "invalid CPU usage, valid range is [0.0, 1.0]")
 	})
 
 	t.Run("ValidSystemRule", func(t *testing.T) {
-		sRule := &SystemRule{MetricType: Load, TriggerCount: 12, Strategy: BBR}
+		sRule := &Rule{MetricType: Load, TriggerCount: 12, Strategy: BBR}
 		err := IsValidSystemRule(sRule)
 		assert.NoError(t, err)
 	})

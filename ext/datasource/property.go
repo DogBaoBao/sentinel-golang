@@ -1,3 +1,17 @@
+// Copyright 1999-2020 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datasource
 
 import (
@@ -7,9 +21,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-var logger = logging.GetDefaultLogger()
-
-// PropertyConverter func is to converter source message bytes to the specific property.
+// PropertyConverter func is to convert source message bytes to the specific property.
 // the first  return value: is the real property;
 // the second return value: return nil if succeed to convert src, if not return the detailed error when convert src.
 // if src is nil or len(src)==0, the return value is (nil,nil)
@@ -50,8 +62,8 @@ func (h *DefaultPropertyHandler) isPropertyConsistent(src interface{}) bool {
 
 func (h *DefaultPropertyHandler) Handle(src []byte) error {
 	defer func() {
-		if err := recover(); err != nil && logger != nil {
-			logger.Panicf("Unexpected panic: %+v", errors.Errorf("%+v", err))
+		if err := recover(); err != nil {
+			logging.Error(errors.Errorf("%+v", err), "Unexpected panic in DefaultPropertyHandler.Handle()")
 		}
 	}()
 	// convert to target property
